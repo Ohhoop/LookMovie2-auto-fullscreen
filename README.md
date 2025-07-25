@@ -1,6 +1,6 @@
 # 🎬 LookMovie Auto-fullscreen
 
-**Chrome extension for LookMovie2.to that automatically restores fullscreen when episodes change.**
+**Extension for LookMovie2.to that automatically restores fullscreen when episodes change.**
 
 ## ✨ What it does
 
@@ -18,6 +18,6 @@
 
 1. Go to any show on **LookMovie2.to**
 2. Press **F11** to go fullscreen
-3. Episodes will automatically stay in fullscreen
+3. Episodes will automatically switch in fullscreen on next episode redirection
 
 **That's it!** 🎉
