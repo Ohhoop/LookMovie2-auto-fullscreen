@@ -1,5 +1,5 @@
 {
-  "manifest_version": 3,
+  "manifest_version": 4,
   "name": "LookMovie Auto-fullscreen",
   "description": "Automatically re-enters fullscreen mode when the player redirects to the next episode.",
   "version": "1.0.0",
