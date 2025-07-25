@@ -8,9 +8,11 @@ Shows helpful toast messages instead of the site's fullscreen button
 
 Installation
 
-Go to chrome://extensions/
-Turn on Developer mode
-Drag and drop the .crx file onto the page
+- Go to chrome://extensions/
+- Turn on Developer mode
+- Drag and drop the .crx file onto the page
+
+
 
 Usage
 
