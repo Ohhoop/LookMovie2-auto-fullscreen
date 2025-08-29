@@ -56,6 +56,21 @@ if (window.location.href.startsWith('https://www.lookmovie2.to/shows/play/')) {
     });
   }
 
+  function setupPlayerDoubleClickListener() {
+    const videoElement = document.querySelector('.vjs-tech');
+    if (videoElement && !videoElement.dataset.doubleClickListenerAdded) {
+      videoElement.addEventListener('dblclick', (e) => {
+        e.stopImmediatePropagation();
+        e.preventDefault();
+        showToast(isF11Active 
+          ? 'To exit fullscreen, press F11 again.' 
+          : 'For fullscreen, please press F11 on your keyboard.'
+        );
+      }, true);
+      videoElement.dataset.doubleClickListenerAdded = 'true';
+    }
+  }
+
   function detectUrlChange() {
     const newUrl = window.location.href;
     if (newUrl !== currentUrl) {
@@ -68,7 +83,10 @@ if (window.location.href.startsWith('https://www.lookmovie2.to/shows/play/')) {
   }
 
   function checkF11() {
-    const nowF11 = window.innerWidth === screen.width && window.innerHeight === screen.height;
+    const widthMatch = Math.abs(window.innerWidth - screen.width) <= 2;
+    const heightMatch = Math.abs(window.innerHeight - screen.height) <= 2;
+    const nowF11 = widthMatch && heightMatch;
+    
     if (nowF11 !== isF11Active || waitingForF11Toggle) {
       if (nowF11) {
         isF11Active = true;
@@ -160,6 +178,7 @@ if (window.location.href.startsWith('https://www.lookmovie2.to/shows/play/')) {
     detectUrlChange();
     checkF11();
     setupPlayerFullscreenButtonListener();
+    setupPlayerDoubleClickListener();
     requestAnimationFrame(mainLoop);
   }
 
@@ -178,6 +197,7 @@ if (window.location.href.startsWith('https://www.lookmovie2.to/shows/play/')) {
       activateFullscreen();
     }
   });
+
 
   requestAnimationFrame(mainLoop);
 }
