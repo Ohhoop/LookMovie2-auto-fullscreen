@@ -6,6 +6,7 @@
 
 - 🖥️ Press **F11** to enter true fullscreen mode
 - 🔄 Automatically re-enters fullscreen when the next episode starts
+- ⏭️ Added a switch that allows to auto-skip the "Go to next video" timer once the episode you were watching is over
 - 💬 Shows helpful toast messages instead of the site's fullscreen button
 
 ## 📦 Installation
