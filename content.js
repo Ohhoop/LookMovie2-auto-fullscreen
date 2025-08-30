@@ -99,11 +99,22 @@ if (window.location.href.startsWith('https://www.lookmovie2.to/shows/play/')) {
     }
   }
 
+  function isVideoReady() {
+    const videoElement = document.querySelector('.vjs-tech') || document.querySelector('video');
+    if (!videoElement) return false;
+    
+    return videoElement.readyState >= 3 && 
+           videoElement.currentTime > 0 && 
+           !videoElement.paused && 
+           videoElement.duration > 0 &&
+           !videoElement.seeking;
+  }
+
   function activateFullscreen() {
     if (document.getElementById('fullscreen-overlay')) return;
 
     const player = document.querySelector('.video-js') || document.querySelector('[class*="player"]');
-    if (!player) return;
+    if (!player || !isVideoReady()) return;
 
     originalParent = player.parentNode;
     originalNextSibling = player.nextSibling;
