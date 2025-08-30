@@ -17,11 +17,20 @@
     observers: new Set(),
     isInitialized: false,
     frameId: null,
-    videoReadyCache: { result: false, timestamp: 0 }
+    videoReadyCache: { result: false, timestamp: 0 },
+    autoSkipEnabled: JSON.parse(localStorage.getItem('lookMovie_autoSkip') || 'false'),
+    autoSkipButtonAdded: false,
+    upnextObserver: null,
+    currentToast: null,
+    toastTimeout: null,
+    f11Transitioning: false,
+    f11TransitionTimeout: null
   };
 
   const CONFIG = Object.freeze({
     TOAST_DURATION: 3000,
+    AUTO_SKIP_TOAST_DURATION: 1000,
+    AUTO_SKIP_TOGGLE_TOAST_DURATION: 1500,
     FADE_OUT_DURATION: 500,
     URL_CHANGE_DELAY: 1000,
     THROTTLE_DELAY: 100,
@@ -41,8 +50,12 @@
     player: '.video-js',
     playerFallback: '[class*="player"]',
     fullscreenButtons: '[class*="fullscreen"], [title*="Fullscreen"]',
+    controlBar: '.vjs-control-bar, .vjs-controls, [class*="control-bar"], [class*="controls"], .video-controls',
+    upnextContainer: 'svg:has(.vjs-upnext-svg-autoplay-ring), [class*="upnext"], .vjs-upnext',
+    upnextSvg: '.vjs-upnext-svg-autoplay-ring, .vjs-upnext-svg-autoplay-circle, .vjs-upnext-svg-autoplay-triangle',
     toast: 'custom-toast',
-    overlay: 'fullscreen-overlay'
+    overlay: 'fullscreen-overlay',
+    autoSkipToggle: 'auto-skip-toggle'
   });
 
   const TOAST_STYLES = Object.freeze({
@@ -89,6 +102,48 @@
     document: {
       overflow: 'hidden'
     }
+  });
+
+  const AUTO_SKIP_BUTTON_STYLES = Object.freeze({
+    position: 'relative',
+    display: 'inline-flex',
+    alignItems: 'center',
+    alignSelf: 'center',
+    width: '36px',
+    height: '18px',
+    backgroundColor: 'rgba(120, 120, 120, 0.6)',
+    border: '2px solid #ffffff !important',
+    borderRadius: '9px',
+    cursor: 'pointer',
+    margin: '0 8px',
+    transition: 'all 0.3s ease',
+    userSelect: 'none',
+    flexShrink: '0',
+    outline: 'none'
+  });
+
+  const AUTO_SKIP_TOGGLE_KNOB_STYLES = Object.freeze({
+    position: 'absolute',
+    top: '50%',
+    left: '2px',
+    width: '12px',
+    height: '12px',
+    backgroundColor: 'rgba(255, 255, 255, 0.8) !important',
+    borderRadius: '50%',
+    transition: 'transform 0.3s ease',
+    boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
+    transform: 'translateY(-50%)'
+  });
+
+  const AUTO_SKIP_ENABLED_STYLES = Object.freeze({
+    backgroundColor: 'rgba(255, 255, 255, 0.8) !important',
+    borderColor: '#ffffff !important'
+  });
+
+  const AUTO_SKIP_KNOB_ENABLED_STYLES = Object.freeze({
+    transform: 'translateX(16px) translateY(-50%)',
+    backgroundColor: '#ffffff !important',
+    border: '1px solid #eee'
   });
 
   const debounce = (fn, delay) => {
@@ -146,24 +201,50 @@
   };
 
   const showToast = (message) => {
-    if (document.getElementById(SELECTORS.toast)) return;
+    if (state.currentToast) {
+      clearTimeout(state.toastTimeout);
+      state.currentToast.remove();
+      state.currentToast = null;
+    }
 
-    const fragment = document.createDocumentFragment();
     const toast = document.createElement('div');
     toast.id = SELECTORS.toast;
     toast.textContent = message;
 
-    Object.assign(toast.style, TOAST_STYLES);
-    fragment.appendChild(toast);
-    document.body.appendChild(fragment);
+    const isAutoSkipMessage = message.includes('Auto-skipping');
+    const toastStyles = isAutoSkipMessage ? {
+      ...TOAST_STYLES,
+      background: 'rgba(255, 255, 255, 0.9)',
+      color: '#333',
+      fontSize: '16px',
+      fontWeight: '500'
+    } : TOAST_STYLES;
+
+    Object.assign(toast.style, toastStyles);
+    document.body.appendChild(toast);
+    state.currentToast = toast;
 
     const hideToast = () => {
-      toast.style.transition = 'opacity 0.5s ease';
-      toast.style.opacity = '0';
-      setTimeout(() => toast.remove(), CONFIG.FADE_OUT_DURATION);
+      if (state.currentToast === toast) {
+        toast.style.transition = 'opacity 0.5s ease';
+        toast.style.opacity = '0';
+        setTimeout(() => {
+          if (toast.parentNode) toast.remove();
+          if (state.currentToast === toast) state.currentToast = null;
+        }, CONFIG.FADE_OUT_DURATION);
+      }
     };
 
-    setTimeout(hideToast, CONFIG.TOAST_DURATION);
+    const isAutoSkipToggle = message.includes('Auto-Skip Next Episode');
+    let duration = CONFIG.TOAST_DURATION;
+    
+    if (isAutoSkipMessage) {
+      duration = CONFIG.AUTO_SKIP_TOAST_DURATION;
+    } else if (isAutoSkipToggle) {
+      duration = CONFIG.AUTO_SKIP_TOGGLE_TOAST_DURATION;
+    }
+    
+    state.toastTimeout = setTimeout(hideToast, duration);
   };
 
   const handleFullscreenRequest = (e) => {
@@ -208,6 +289,198 @@
     }, CONFIG.THROTTLE_DELAY, 'setupDoubleClick');
   };
 
+  const createAutoSkipToggle = () => {
+    if (state.autoSkipButtonAdded || document.getElementById(SELECTORS.autoSkipToggle)) return;
+
+    const controlBar = getCachedElement('.vjs-control-bar');
+    if (!controlBar) return;
+    
+    const toggleButton = document.createElement('div');
+    toggleButton.id = SELECTORS.autoSkipToggle;
+    toggleButton.title = 'Auto-Skip Next Episode';
+    toggleButton.setAttribute('role', 'switch');
+    toggleButton.setAttribute('aria-checked', state.autoSkipEnabled.toString());
+
+    Object.assign(toggleButton.style, AUTO_SKIP_BUTTON_STYLES);
+    
+    const knob = document.createElement('div');
+    Object.assign(knob.style, AUTO_SKIP_TOGGLE_KNOB_STYLES);
+    
+    if (state.autoSkipEnabled) {
+      Object.assign(toggleButton.style, AUTO_SKIP_ENABLED_STYLES);
+      toggleButton.style.setProperty('background-color', 'rgba(255, 255, 255, 0.8)', 'important');
+      toggleButton.style.setProperty('border-color', '#ffffff', 'important');
+      Object.assign(knob.style, AUTO_SKIP_KNOB_ENABLED_STYLES);
+    }
+
+    toggleButton.appendChild(knob);
+
+    toggleButton.addEventListener('click', (e) => {
+      e.stopPropagation();
+      state.autoSkipEnabled = !state.autoSkipEnabled;
+      localStorage.setItem('lookMovie_autoSkip', JSON.stringify(state.autoSkipEnabled));
+      toggleButton.setAttribute('aria-checked', state.autoSkipEnabled.toString());
+      
+      if (state.autoSkipEnabled) {
+        Object.assign(toggleButton.style, AUTO_SKIP_ENABLED_STYLES);
+        toggleButton.style.setProperty('background-color', 'rgba(255, 255, 255, 0.8)', 'important');
+        Object.assign(knob.style, AUTO_SKIP_KNOB_ENABLED_STYLES);
+        showToast('Auto-Skip Next Episode enabled');
+        setupAutoSkipWatcher();
+      } else {
+        toggleButton.style.backgroundColor = 'rgba(120, 120, 120, 0.6)';
+        toggleButton.style.borderColor = '#ffffff';
+        knob.style.transform = 'translateX(0px) translateY(-50%)';
+        knob.style.backgroundColor = 'rgba(255, 255, 255, 0.8)';
+        knob.style.border = 'none';
+        knob.style.setProperty('background-color', 'rgba(255, 255, 255, 0.8)', 'important');
+        showToast('Auto-Skip Next Episode disabled');
+        if (state.upnextObserver) {
+          state.upnextObserver.disconnect();
+          state.observers.delete(state.upnextObserver);
+          state.upnextObserver = null;
+        }
+      }
+    });
+
+    controlBar.appendChild(toggleButton);
+    state.autoSkipButtonAdded = true;
+  };
+
+  const findUpnextElement = () => {
+    const selectors = [
+      'svg .vjs-upnext-svg-autoplay-ring',
+      '.vjs-upnext-svg-autoplay-ring',
+      '.vjs-upnext-svg-autoplay-circle',
+      'svg:has(.vjs-upnext-svg-autoplay-ring)',
+      '[class*="upnext"]',
+      '.vjs-upnext'
+    ];
+    
+    for (const selector of selectors) {
+      const element = document.querySelector(selector);
+      if (element) {
+        return element.closest('svg') || element.closest('button') || element.closest('[role="button"]') || element;
+      }
+    }
+    return null;
+  };
+
+  const triggerClick = (element) => {
+    const clickMethods = [
+      () => element.click(),
+      () => element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })),
+      () => element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })),
+      () => element.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }))
+    ];
+    
+    for (const method of clickMethods) {
+      try {
+        method();
+        return true;
+      } catch (e) {
+        continue;
+      }
+    }
+    return false;
+  };
+
+  const setupAutoSkipWatcher = () => {
+    if (!state.autoSkipEnabled || state.upnextObserver) return;
+
+    const observer = new MutationObserver(debounce((mutations) => {
+      if (!state.autoSkipEnabled) return;
+      
+      for (const mutation of mutations) {
+        if (mutation.type === 'childList') {
+          for (const node of mutation.addedNodes) {
+            if (node.nodeType === 1) {
+              const containsUpnext = node.querySelector?.('.vjs-upnext-svg-autoplay-ring') || 
+                                   node.matches?.('.vjs-upnext-svg-autoplay-ring') ||
+                                   node.querySelector?.('svg .vjs-upnext-svg-autoplay-ring');
+              
+              if (containsUpnext) {
+                setTimeout(() => handleUpnextDetection(), 100);
+              }
+            }
+          }
+        }
+        
+        if (mutation.type === 'attributes' && mutation.target.classList?.contains('vjs-upnext-svg-autoplay-ring')) {
+          if (mutation.attributeName === 'stroke-dashoffset') {
+            setTimeout(() => handleUpnextDetection(), 50);
+          }
+        }
+      }
+    }, 30));
+
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['stroke-dashoffset', 'style', 'class']
+    });
+
+    state.upnextObserver = observer;
+    state.observers.add(observer);
+  };
+
+  const handleUpnextDetection = () => {
+    if (!state.autoSkipEnabled || state.f11Transitioning) return;
+    
+    const upnextElement = findUpnextElement();
+    if (upnextElement && upnextElement.offsetParent !== null) {
+      const success = triggerClick(upnextElement);
+      if (success) {
+        showToast('Auto-skipping to next episode...');
+      } else {
+        tryClickParents(upnextElement);
+      }
+    }
+  };
+
+  const tryClickParents = (element) => {
+    const parents = [
+      element.parentElement,
+      element.closest('button'),
+      element.closest('[role="button"]'),
+      element.closest('.vjs-button'),
+      element.closest('[class*="button"]'),
+      element.closest('[onclick]'),
+      element.closest('div[style*="cursor"]')
+    ].filter(Boolean);
+
+    for (const parent of parents) {
+      if (triggerClick(parent)) {
+        showToast('Auto-skipping to next episode...');
+        return true;
+      }
+    }
+    return false;
+  };
+
+  const checkAllUpnextSelectors = () => {
+    const allSelectors = [
+      '.vjs-upnext-svg-autoplay-ring',
+      '.vjs-upnext-svg-autoplay-circle', 
+      '.vjs-upnext-svg-autoplay-triangle',
+      'svg:has(.vjs-upnext-svg-autoplay-ring)',
+      '[class*="upnext"]',
+      '[class*="next-episode"]',
+      '[class*="autoplay"]'
+    ];
+
+    for (const selector of allSelectors) {
+      const elements = document.querySelectorAll(selector);
+      
+      elements.forEach((el) => {
+        if (el.offsetParent !== null) {
+          triggerClick(el) || tryClickParents(el);
+        }
+      });
+    }
+  };
+
   const detectUrlChange = () => {
     const newUrl = window.location.href;
     if (newUrl !== state.currentUrl) {
@@ -215,6 +488,13 @@
       clearElementCache();
       state.lastButtonCount = 0;
       state.lastVideoElement = null;
+      state.autoSkipButtonAdded = false;
+      
+      if (state.upnextObserver) {
+        state.upnextObserver.disconnect();
+        state.observers.delete(state.upnextObserver);
+        state.upnextObserver = null;
+      }
       
       if (state.isF11Active) {
         deactivateFullscreen();
@@ -247,9 +527,46 @@
     state.lastF11Check = nowF11;
     
     if (nowF11 !== state.isF11Active || state.waitingForF11Toggle) {
+      if (state.f11TransitionTimeout) {
+        clearTimeout(state.f11TransitionTimeout);
+      }
+      
+      // Si on entre en F11 et qu'un toast "enter" est affiché, le faire disparaître immédiatement
+      if (!state.isF11Active && nowF11 && state.currentToast && 
+          state.currentToast.textContent === TOAST_MESSAGES.enter) {
+        clearTimeout(state.toastTimeout);
+        state.currentToast.style.transition = 'opacity 0.2s ease';
+        state.currentToast.style.opacity = '0';
+        setTimeout(() => {
+          if (state.currentToast && state.currentToast.parentNode) {
+            state.currentToast.remove();
+          }
+          state.currentToast = null;
+        }, 200);
+      }
+      
+      // Si on sort de F11 et qu'un toast "exit" est affiché, le faire disparaître immédiatement
+      if (state.isF11Active && !nowF11 && state.currentToast && 
+          state.currentToast.textContent === TOAST_MESSAGES.exit) {
+        clearTimeout(state.toastTimeout);
+        state.currentToast.style.transition = 'opacity 0.2s ease';
+        state.currentToast.style.opacity = '0';
+        setTimeout(() => {
+          if (state.currentToast && state.currentToast.parentNode) {
+            state.currentToast.remove();
+          }
+          state.currentToast = null;
+        }, 200);
+      }
+      
+      state.f11Transitioning = true;
       state.isF11Active = nowF11;
       state.waitingForF11Toggle = false;
       nowF11 ? activateFullscreen() : deactivateFullscreen();
+      state.f11TransitionTimeout = setTimeout(() => {
+        state.f11Transitioning = false;
+        state.f11TransitionTimeout = null;
+      }, 1000);
     }
   };
 
@@ -267,7 +584,6 @@
     
     const result = videoElement.readyState >= 3 && 
                    videoElement.currentTime > 0 && 
-                   !videoElement.paused && 
                    videoElement.duration > 0 &&
                    !videoElement.seeking;
     
@@ -355,6 +671,13 @@
       checkF11();
       setupPlayerFullscreenButtonListener();
       setupPlayerDoubleClickListener();
+      
+      throttle(() => {
+        createAutoSkipToggle();
+        if (state.autoSkipEnabled && !state.upnextObserver) {
+          setupAutoSkipWatcher();
+        }
+      }, CONFIG.THROTTLE_DELAY, 'setupAutoSkip');
     } catch (error) {
       console.warn('Main loop error:', error);
     }
@@ -381,6 +704,22 @@
     if (state.frameId) {
       cancelAnimationFrame(state.frameId);
       state.frameId = null;
+    }
+    
+    if (state.upnextObserver) {
+      state.upnextObserver.disconnect();
+      state.upnextObserver = null;
+    }
+    
+    if (state.currentToast) {
+      clearTimeout(state.toastTimeout);
+      state.currentToast.remove();
+      state.currentToast = null;
+    }
+    
+    if (state.f11TransitionTimeout) {
+      clearTimeout(state.f11TransitionTimeout);
+      state.f11TransitionTimeout = null;
     }
     
     state.observers.forEach(observer => observer.disconnect());

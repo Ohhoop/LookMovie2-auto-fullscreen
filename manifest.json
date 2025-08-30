@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "LookMovie Auto-fullscreen",
   "description": "Automatically re-enters fullscreen mode when the player redirects to the next episode.",
-  "version": "1.0.3",
+  "version": "1.1.0",
   "permissions": [],
   "host_permissions": [
     "*://www.lookmovie2.to/*"
