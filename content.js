@@ -1,7 +1,21 @@
 (() => {
   'use strict';
-  
+
+  const removeAds = () => {
+    const ads = document.querySelectorAll('.ad-container, #floating-ads-internal, .player-pre-init-ads, [data-ads-url], .movie-btn, .chat-link');
+    ads.forEach(ad => ad.remove());
+  };
+
+  const adsObserver = new MutationObserver(removeAds);
+  removeAds();
+  adsObserver.observe(document.body || document.documentElement, { childList: true, subtree: true });
+
   if (!window.location.href.startsWith('https://www.lookmovie2.to/shows/play/')) return;
+
+  const getShowSlug = () => {
+    const match = window.location.href.match(/\/shows\/play\/\d+-(.+?)#/);
+    return match ? match[1] : null;
+  };
 
   const state = {
     currentUrl: window.location.href,
@@ -24,7 +38,10 @@
     currentToast: null,
     toastTimeout: null,
     f11Transitioning: false,
-    f11TransitionTimeout: null
+    f11TransitionTimeout: null,
+    subtitleListenerAdded: false,
+    subtitleRestored: false,
+    subtitleRestoreAttempts: 0
   };
 
   const CONFIG = Object.freeze({
@@ -489,6 +506,9 @@
       state.lastButtonCount = 0;
       state.lastVideoElement = null;
       state.autoSkipButtonAdded = false;
+      state.subtitleListenerAdded = false;
+      state.subtitleRestored = false;
+      state.subtitleRestoreAttempts = 0;
       
       if (state.upnextObserver) {
         state.upnextObserver.disconnect();
@@ -665,13 +685,79 @@
     }
   };
 
+  const setupSubtitleListener = () => {
+    if (state.subtitleListenerAdded) return;
+
+    const subList = document.querySelector('.vjs-subtitles-list');
+    if (!subList) return;
+
+    subList.addEventListener('click', (e) => {
+      const item = e.target.closest('.vjs-subtitles-language-item');
+      if (!item) return;
+
+      const slug = getShowSlug();
+      if (!slug) return;
+
+      const text = item.textContent.trim();
+      localStorage.setItem('lookMovie_subtitle', JSON.stringify({ slug, subtitle: text }));
+    });
+
+    const offBtn = document.querySelector('.vjs-subtitle-off');
+    if (offBtn) {
+      offBtn.addEventListener('click', () => {
+        const slug = getShowSlug();
+        if (slug) localStorage.removeItem('lookMovie_subtitle');
+      });
+    }
+
+    state.subtitleListenerAdded = true;
+  };
+
+  const restoreSubtitle = () => {
+    if (state.subtitleRestored) return;
+
+    const slug = getShowSlug();
+    if (!slug) return;
+
+    const saved = JSON.parse(localStorage.getItem('lookMovie_subtitle') || 'null');
+    if (!saved || saved.slug !== slug) return;
+
+    const items = document.querySelectorAll('.vjs-subtitles-language-item');
+    if (!items.length) return;
+
+    for (const item of items) {
+      if (item.textContent.trim() === saved.subtitle) {
+        item.click();
+        state.subtitleRestored = true;
+        return;
+      }
+    }
+
+    state.subtitleRestoreAttempts++;
+    if (state.subtitleRestoreAttempts > 60) {
+      showToast('Cannot find subtitle "' + saved.subtitle + '", please select another source.');
+      state.subtitleRestored = true;
+    }
+  };
+
+  const removePremiumMenuItems = () => {
+    const menuItems = document.querySelectorAll('.vjs-menu-item');
+    menuItems.forEach(item => {
+      const text = item.textContent.trim();
+      if (text === 'HD' || text === 'FullHD') item.remove();
+    });
+  };
+
   const mainLoop = () => {
     try {
       detectUrlChange();
       checkF11();
       setupPlayerFullscreenButtonListener();
       setupPlayerDoubleClickListener();
-      
+      removePremiumMenuItems();
+      setupSubtitleListener();
+      restoreSubtitle();
+
       throttle(() => {
         createAutoSkipToggle();
         if (state.autoSkipEnabled && !state.upnextObserver) {

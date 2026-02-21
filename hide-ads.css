@@ -1,0 +1,8 @@
+.ad-container,
+#floating-ads-internal,
+.player-pre-init-ads,
+[data-ads-url],
+.movie-btn,
+.chat-link {
+  display: none !important;
+}
