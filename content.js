@@ -47,7 +47,7 @@
   const SELECTORS = Object.freeze({
     video: '.vjs-tech',
     videoFallback: 'video',
-    player: '.video-js',
+    player: 'div.video-js',
     playerFallback: '[class*="player"]',
     fullscreenButtons: '[class*="fullscreen"], [title*="Fullscreen"]',
     controlBar: '.vjs-control-bar, .vjs-controls, [class*="control-bar"], [class*="controls"], .video-controls',
