@@ -2,7 +2,7 @@
   'use strict';
 
   const removeAds = () => {
-    const ads = document.querySelectorAll('.ad-container, #floating-ads-internal, .player-pre-init-ads, [data-ads-url], .movie-btn, .chat-link');
+    const ads = document.querySelectorAll('.ad-container, #floating-ads-internal, .player-pre-init-ads, [data-ads-url], .movie-btn, .chat-link, .loginLink, .rp-component-wrapper');
     ads.forEach(ad => ad.remove());
   };
 
@@ -41,7 +41,8 @@
     f11TransitionTimeout: null,
     subtitleListenerAdded: false,
     subtitleRestored: false,
-    subtitleRestoreAttempts: 0
+    subtitleRestoreAttempts: 0,
+    reactivationPending: false
   };
 
   const CONFIG = Object.freeze({
@@ -402,6 +403,25 @@
     return false;
   };
 
+  const UPNEXT_OBSERVER_OPTIONS = Object.freeze({
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['stroke-dashoffset', 'style', 'class']
+  });
+
+  const withAutoSkipPaused = (fn) => {
+    const observer = state.upnextObserver;
+    if (observer) observer.disconnect();
+    try {
+      fn();
+    } finally {
+      if (observer && state.autoSkipEnabled && state.upnextObserver === observer) {
+        observer.observe(document.body, UPNEXT_OBSERVER_OPTIONS);
+      }
+    }
+  };
+
   const setupAutoSkipWatcher = () => {
     if (!state.autoSkipEnabled || state.upnextObserver) return;
 
@@ -431,12 +451,7 @@
       }
     }, 30));
 
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ['stroke-dashoffset', 'style', 'class']
-    });
+    observer.observe(document.body, UPNEXT_OBSERVER_OPTIONS);
 
     state.upnextObserver = observer;
     state.observers.add(observer);
@@ -517,20 +532,8 @@
       }
       
       if (state.isF11Active) {
-        deactivateFullscreen();
-        
-        const attemptReactivation = (attempts = 0) => {
-          if (attempts > 20) return;
-          
-          const player = getCachedElement(SELECTORS.player) || getCachedElement(SELECTORS.playerFallback);
-          if (player && isVideoReady()) {
-            activateFullscreen();
-          } else {
-            setTimeout(() => attemptReactivation(attempts + 1), 500);
-          }
-        };
-        
-        setTimeout(attemptReactivation, CONFIG.URL_CHANGE_DELAY);
+        deactivateFullscreen(false);
+        scheduleReactivation();
       }
     }
   };
@@ -611,6 +614,34 @@
     return result;
   };
 
+  const isEpisodeFullyLoaded = () => {
+    const wrapper = document.querySelector('.player__wrapper');
+    if (!wrapper || getComputedStyle(wrapper).display === 'none') return false;
+
+    const loader = document.querySelector('.placeholder__wrapper');
+    if (loader && loader.classList.contains('show-loader') &&
+        getComputedStyle(loader).display !== 'none') return false;
+
+    const vjsRoot = getCachedElement(SELECTORS.player) || getCachedElement(SELECTORS.playerFallback);
+    if (!vjsRoot) return false;
+
+    const cl = vjsRoot.classList;
+    if (!cl.contains('vjs-has-started')) return false;
+    if (cl.contains('vjs-waiting') || cl.contains('vjs-seeking') || cl.contains('vjs-error')) return false;
+
+    const video = vjsRoot.querySelector(SELECTORS.video) ||
+                  vjsRoot.querySelector(SELECTORS.videoFallback) ||
+                  getCachedElement(SELECTORS.video) ||
+                  getCachedElement(SELECTORS.videoFallback);
+    if (!video) return false;
+
+    return video.readyState >= 3 &&
+           video.currentTime > 0 &&
+           video.duration > 0 &&
+           !video.seeking &&
+           !video.paused;
+  };
+
   const setElementStyles = (element, styles) => {
     if (!element?.style) return;
     Object.assign(element.style, styles);
@@ -620,7 +651,11 @@
     try {
       if (document.getElementById(SELECTORS.overlay)) return;
 
-      const player = getCachedElement(SELECTORS.player) || getCachedElement(SELECTORS.playerFallback);
+      const liveContainer = document.getElementById('player-container');
+      const player = liveContainer?.querySelector(SELECTORS.player) ||
+                     liveContainer?.querySelector(SELECTORS.playerFallback) ||
+                     getCachedElement(SELECTORS.player) ||
+                     getCachedElement(SELECTORS.playerFallback);
       if (!player || !isVideoReady()) return;
 
       state.originalParent = player.parentNode;
@@ -648,31 +683,35 @@
         maxHeight: dimensions.height
       });
 
-      overlay.appendChild(player);
-      body.appendChild(overlay);
+      withAutoSkipPaused(() => {
+        overlay.appendChild(player);
+        body.appendChild(overlay);
+      });
     } catch (error) {
       console.warn('Fullscreen activation failed:', error);
     }
   };
 
-  const deactivateFullscreen = () => {
+  const deactivateFullscreen = (restorePlayer = true) => {
     try {
       const overlay = document.getElementById(SELECTORS.overlay);
       if (!overlay) return;
 
       const player = overlay.querySelector(SELECTORS.player) || overlay.querySelector(SELECTORS.playerFallback);
-      if (player && state.originalParent) {
-        player.removeAttribute('style');
-        const { originalParent, originalNextSibling } = state;
-        
-        if (originalNextSibling?.parentNode === originalParent) {
-          originalParent.insertBefore(player, originalNextSibling);
-        } else {
-          originalParent.appendChild(player);
-        }
-      }
+      withAutoSkipPaused(() => {
+        if (restorePlayer && player && state.originalParent) {
+          player.removeAttribute('style');
+          const { originalParent, originalNextSibling } = state;
 
-      overlay.remove();
+          if (originalNextSibling?.parentNode === originalParent) {
+            originalParent.insertBefore(player, originalNextSibling);
+          } else {
+            originalParent.appendChild(player);
+          }
+        }
+
+        overlay.remove();
+      });
 
       const { body, documentElement } = document;
       setElementStyles(documentElement, { overflow: '' });
@@ -683,6 +722,28 @@
     } catch (error) {
       console.warn('Fullscreen deactivation failed:', error);
     }
+  };
+
+  const scheduleReactivation = () => {
+    if (state.reactivationPending) return;
+    state.reactivationPending = true;
+
+    const attempt = (attempts = 0) => {
+      if (!state.isF11Active || attempts > 120) {
+        state.reactivationPending = false;
+        return;
+      }
+
+      if (isEpisodeFullyLoaded()) {
+        activateFullscreen();
+        state.reactivationPending = false;
+        return;
+      }
+
+      setTimeout(() => attempt(attempts + 1), 500);
+    };
+
+    setTimeout(() => attempt(0), CONFIG.URL_CHANGE_DELAY);
   };
 
   const setupSubtitleListener = () => {
