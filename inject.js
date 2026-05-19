@@ -59,4 +59,44 @@
       }
     });
   }
+  const nativeWindowOpen = window.open;
+  if (typeof nativeWindowOpen === 'function') {
+    const noop = () => {};
+    const makeStub = () => ({
+      closed: true,
+      opener: null,
+      focus: noop,
+      blur: noop,
+      close: noop,
+      postMessage: noop,
+      location: { href: '', assign: noop, replace: noop, reload: noop },
+      document: { write: noop, writeln: noop, close: noop, open: noop }
+    });
+
+    const isSameSite = (url) => {
+      if (!url) return false;
+      try {
+        return new URL(String(url), location.href).host === location.host;
+      } catch (e) {
+        return false;
+      }
+    };
+
+    const guardedOpen = function (url, ...rest) {
+      if (isSameSite(url)) {
+        return nativeWindowOpen.call(window, url, ...rest);
+      }
+      return makeStub();
+    };
+
+    try {
+      Object.defineProperty(window, 'open', {
+        configurable: true,
+        writable: true,
+        value: guardedOpen
+      });
+    } catch (e) {
+      window.open = guardedOpen;
+    }
+  }
 })();
