@@ -9,6 +9,11 @@
 - ⏭️ Added a switch that allows to auto-skip the "Go to next video" timer once the episode you were watching is over
 - 💬 Shows helpful toast messages instead of the site's fullscreen button
 
+## ⬇️ Download
+
+- Latest release: **[LookMovie-Auto-Fullscreen.crx](https://github.com/Ohhoop/LookMovie2-auto-fullscreen/releases/latest/download/LookMovie-Auto-Fullscreen.crx)**
+- All releases: https://github.com/Ohhoop/LookMovie2-auto-fullscreen/releases
+
 ## 📦 Installation
 
 - Go to `chrome://extensions/`
