@@ -42,7 +42,8 @@
     subtitleListenerAdded: false,
     subtitleRestored: false,
     subtitleRestoreAttempts: 0,
-    reactivationPending: false
+    reactivationPending: false,
+    loadingOverlayActive: false
   };
 
   const CONFIG = Object.freeze({
@@ -54,7 +55,11 @@
     THROTTLE_DELAY: 100,
     F11_TOLERANCE: 2,
     OBSERVER_DEBOUNCE: 250,
-    MAX_CACHE_SIZE: 20
+    MAX_CACHE_SIZE: 20,
+    LOADING_RETRY_INTERVAL: 250,
+    LOADING_MAX_ATTEMPTS: 240,
+    EPISODE_RETRY_INTERVAL: 500,
+    EPISODE_MAX_ATTEMPTS: 120
   });
 
   const TOAST_MESSAGES = Object.freeze({
@@ -73,7 +78,10 @@
     upnextSvg: '.vjs-upnext-svg-autoplay-ring, .vjs-upnext-svg-autoplay-circle, .vjs-upnext-svg-autoplay-triangle',
     toast: 'custom-toast',
     overlay: 'fullscreen-overlay',
-    autoSkipToggle: 'auto-skip-toggle'
+    autoSkipToggle: 'auto-skip-toggle',
+    loadingOverlay: 'fullscreen-loading-overlay',
+    loadingSpinner: 'fullscreen-loading-spinner',
+    loadingKeyframes: 'fullscreen-loading-keyframes'
   });
 
   const TOAST_STYLES = Object.freeze({
@@ -120,6 +128,33 @@
     document: {
       overflow: 'hidden'
     }
+  });
+
+  const LOADING_OVERLAY_STYLES = Object.freeze({
+    position: 'fixed',
+    top: '0',
+    left: '0',
+    width: '100vw',
+    height: '100vh',
+    background: 'black',
+    zIndex: '999998',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    margin: '0',
+    padding: '0',
+    border: 'none',
+    overflow: 'hidden'
+  });
+
+  const LOADING_SPINNER_STYLES = Object.freeze({
+    width: '64px',
+    height: '64px',
+    border: '6px solid rgba(255, 255, 255, 0.2)',
+    borderTopColor: '#ffffff',
+    borderRadius: '50%',
+    animation: 'lm-spin 0.9s linear infinite',
+    boxSizing: 'border-box'
   });
 
   const AUTO_SKIP_BUTTON_STYLES = Object.freeze({
@@ -533,6 +568,7 @@
       
       if (state.isF11Active) {
         deactivateFullscreen(false);
+        createLoadingOverlay();
         scheduleReactivation();
       }
     }
@@ -585,7 +621,14 @@
       state.f11Transitioning = true;
       state.isF11Active = nowF11;
       state.waitingForF11Toggle = false;
-      nowF11 ? activateFullscreen() : deactivateFullscreen();
+      if (nowF11) {
+        if (!activateFullscreen()) {
+          createLoadingOverlay();
+          scheduleManualActivation();
+        }
+      } else {
+        deactivateFullscreen();
+      }
       state.f11TransitionTimeout = setTimeout(() => {
         state.f11Transitioning = false;
         state.f11TransitionTimeout = null;
@@ -647,16 +690,57 @@
     Object.assign(element.style, styles);
   };
 
+  const injectLoadingKeyframes = () => {
+    if (document.getElementById(SELECTORS.loadingKeyframes)) return;
+    const style = document.createElement('style');
+    style.id = SELECTORS.loadingKeyframes;
+    style.textContent = '@keyframes lm-spin { to { transform: rotate(360deg); } }';
+    (document.head || document.documentElement).appendChild(style);
+  };
+
+  const createLoadingOverlay = () => {
+    if (document.getElementById(SELECTORS.overlay)) return false;
+    if (document.getElementById(SELECTORS.loadingOverlay)) return true;
+
+    const { body, documentElement } = document;
+    if (!body) return false;
+
+    setElementStyles(documentElement, FULLSCREEN_STYLES.document);
+    setElementStyles(body, FULLSCREEN_STYLES.document);
+
+    const overlay = document.createElement('div');
+    overlay.id = SELECTORS.loadingOverlay;
+    setElementStyles(overlay, LOADING_OVERLAY_STYLES);
+
+    const spinner = document.createElement('div');
+    spinner.id = SELECTORS.loadingSpinner;
+    setElementStyles(spinner, LOADING_SPINNER_STYLES);
+
+    overlay.appendChild(spinner);
+    body.appendChild(overlay);
+    state.loadingOverlayActive = true;
+    return true;
+  };
+
+  const removeLoadingOverlay = () => {
+    const overlay = document.getElementById(SELECTORS.loadingOverlay);
+    if (overlay) overlay.remove();
+    state.loadingOverlayActive = false;
+  };
+
   const activateFullscreen = () => {
     try {
-      if (document.getElementById(SELECTORS.overlay)) return;
+      if (document.getElementById(SELECTORS.overlay)) {
+        removeLoadingOverlay();
+        return true;
+      }
 
       const liveContainer = document.getElementById('player-container');
       const player = liveContainer?.querySelector(SELECTORS.player) ||
                      liveContainer?.querySelector(SELECTORS.playerFallback) ||
                      getCachedElement(SELECTORS.player) ||
                      getCachedElement(SELECTORS.playerFallback);
-      if (!player || !isVideoReady()) return;
+      if (!player || !isVideoReady()) return false;
 
       state.originalParent = player.parentNode;
       state.originalNextSibling = player.nextSibling;
@@ -687,15 +771,29 @@
         overlay.appendChild(player);
         body.appendChild(overlay);
       });
+
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => removeLoadingOverlay());
+      });
+      return true;
     } catch (error) {
       console.warn('Fullscreen activation failed:', error);
+      return false;
     }
   };
 
   const deactivateFullscreen = (restorePlayer = true) => {
     try {
+      removeLoadingOverlay();
+      state.reactivationPending = false;
+
       const overlay = document.getElementById(SELECTORS.overlay);
-      if (!overlay) return;
+      if (!overlay) {
+        const { body, documentElement } = document;
+        setElementStyles(documentElement, { overflow: '' });
+        setElementStyles(body, { overflow: '' });
+        return;
+      }
 
       const player = overlay.querySelector(SELECTORS.player) || overlay.querySelector(SELECTORS.playerFallback);
       withAutoSkipPaused(() => {
@@ -724,26 +822,62 @@
     }
   };
 
-  const scheduleReactivation = () => {
+  const scheduleActivation = ({ predicate, initialDelay, retryInterval, maxAttempts, onGiveUp }) => {
     if (state.reactivationPending) return;
     state.reactivationPending = true;
 
     const attempt = (attempts = 0) => {
-      if (!state.isF11Active || attempts > 120) {
+      if (!state.isF11Active) {
         state.reactivationPending = false;
+        removeLoadingOverlay();
         return;
       }
 
-      if (isEpisodeFullyLoaded()) {
-        activateFullscreen();
+      if (attempts > maxAttempts) {
         state.reactivationPending = false;
+        if (typeof onGiveUp === 'function') onGiveUp();
         return;
       }
 
-      setTimeout(() => attempt(attempts + 1), 500);
+      if (predicate()) {
+        const success = activateFullscreen();
+        if (success) {
+          state.reactivationPending = false;
+          return;
+        }
+      }
+
+      setTimeout(() => attempt(attempts + 1), retryInterval);
     };
 
-    setTimeout(() => attempt(0), CONFIG.URL_CHANGE_DELAY);
+    if (initialDelay > 0) {
+      setTimeout(() => attempt(0), initialDelay);
+    } else {
+      attempt(0);
+    }
+  };
+
+  const scheduleReactivation = () => {
+    scheduleActivation({
+      predicate: isEpisodeFullyLoaded,
+      initialDelay: CONFIG.URL_CHANGE_DELAY,
+      retryInterval: CONFIG.EPISODE_RETRY_INTERVAL,
+      maxAttempts: CONFIG.EPISODE_MAX_ATTEMPTS,
+      onGiveUp: () => removeLoadingOverlay()
+    });
+  };
+
+  const scheduleManualActivation = () => {
+    scheduleActivation({
+      predicate: isVideoReady,
+      initialDelay: 0,
+      retryInterval: CONFIG.LOADING_RETRY_INTERVAL,
+      maxAttempts: CONFIG.LOADING_MAX_ATTEMPTS,
+      onGiveUp: () => {
+        removeLoadingOverlay();
+        showToast('Video failed to load in time. Press F11 to exit.');
+      }
+    });
   };
 
   const setupSubtitleListener = () => {
@@ -852,23 +986,27 @@
       cancelAnimationFrame(state.frameId);
       state.frameId = null;
     }
-    
+
     if (state.upnextObserver) {
       state.upnextObserver.disconnect();
       state.upnextObserver = null;
     }
-    
+
     if (state.currentToast) {
       clearTimeout(state.toastTimeout);
       state.currentToast.remove();
       state.currentToast = null;
     }
-    
+
     if (state.f11TransitionTimeout) {
       clearTimeout(state.f11TransitionTimeout);
       state.f11TransitionTimeout = null;
     }
-    
+
+    removeLoadingOverlay();
+    state.reactivationPending = false;
+    document.getElementById(SELECTORS.loadingKeyframes)?.remove();
+
     state.observers.forEach(observer => observer.disconnect());
     state.observers.clear();
     state.cachedElements.clear();
@@ -887,11 +1025,13 @@
 
   const init = () => {
     if (state.isInitialized) return;
-    
+
+    injectLoadingKeyframes();
+
     document.addEventListener('keydown', handleKeydown, { passive: false });
     window.addEventListener('resize', handleResize, { passive: true });
     window.addEventListener('beforeunload', cleanup, { once: true, passive: true });
-    
+
     setupUrlObserver();
 
     state.isInitialized = true;
