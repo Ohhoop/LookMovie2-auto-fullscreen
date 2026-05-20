@@ -574,14 +574,31 @@
     }
   };
 
-  const checkF11 = () => {
+  const detectFullscreenViaMatchMedia = () => {
+    try {
+      return window.matchMedia('(display-mode: fullscreen)').matches;
+    } catch (e) {
+      return null;
+    }
+  };
+
+  const detectFullscreenViaDimensions = () => {
     const { innerWidth, innerHeight } = window;
     const { width: screenWidth, height: screenHeight } = screen;
-    
     const widthMatch = Math.abs(innerWidth - screenWidth) <= CONFIG.F11_TOLERANCE;
     const heightMatch = Math.abs(innerHeight - screenHeight) <= CONFIG.F11_TOLERANCE;
-    const nowF11 = widthMatch && heightMatch;
-    
+    return widthMatch && heightMatch;
+  };
+
+  const isBrowserFullscreen = () => {
+    const primary = detectFullscreenViaMatchMedia();
+    if (primary === true) return true;
+    return detectFullscreenViaDimensions();
+  };
+
+  const checkF11 = () => {
+    const nowF11 = isBrowserFullscreen();
+
     if (state.lastF11Check === nowF11 && !state.waitingForF11Toggle) return;
     state.lastF11Check = nowF11;
     
